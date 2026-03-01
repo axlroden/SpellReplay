@@ -1,4 +1,4 @@
-## Interface: 50500
+## Interface: 11503
 ## Title: SpellReplay
 ## Author: Pytte, Mako (Venoxis) - Original: Oldsalt (Smolderforge)
 ## Notes: Displays the spells you just casted and much more

@@ -1,0 +1,17 @@
+## BigWigsMods/packager configuration
+## https://github.com/BigWigsMods/packager
+
+package-as: SpellReplay
+
+# Replace with your CurseForge project ID (visible on your project's overview page).
+# The packager uses this to upload to the correct CurseForge project.
+x-curse-project-id: 1464370
+
+# Optional: WoWInterface project ID.
+# x-wowi-id: YOUR_WOWI_ID
+
+# Libraries are already bundled in Libs/ — no externals needed.
+
+ignore:
+  - .github
+  - .pkgmeta

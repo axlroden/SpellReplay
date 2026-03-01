@@ -1,5 +1,39 @@
--- SpellReplay (Wrath Classic)
-local LibSharedMedia = LibStub("LibSharedMedia-3.0")
+-- SpellReplay (MoP Classic / TBC Anniversary / Classic Era compatibility)
+
+local unpack = _G.unpack or table.unpack
+local abs = _G.abs or math.abs
+local strfind = _G.strfind or string.find
+
+-- Classic Era / early TBC compat: GetNumGroupMembers does not exist on 1.x/2.x clients.
+-- Fall back to the old GetNumPartyMembers + GetNumRaidMembers pair.
+if not _G.GetNumGroupMembers then
+	_G.GetNumGroupMembers = function()
+		local raid = (_G.GetNumRaidMembers and _G.GetNumRaidMembers()) or 0
+		if raid > 0 then return raid end
+		return (_G.GetNumPartyMembers and _G.GetNumPartyMembers()) or 0
+	end
+end
+
+local LibSharedMedia
+do
+	local libStub = _G.LibStub
+	if type(libStub) == "table" and type(libStub.GetLibrary) == "function" then
+		LibSharedMedia = libStub:GetLibrary("LibSharedMedia-3.0", true)
+	elseif type(libStub) == "function" then
+		local ok, lib = pcall(libStub, "LibSharedMedia-3.0")
+		if ok then
+			LibSharedMedia = lib
+		end
+	end
+end
+
+if not LibSharedMedia then
+	if _G.DEFAULT_CHAT_FRAME and _G.DEFAULT_CHAT_FRAME.AddMessage then
+		_G.DEFAULT_CHAT_FRAME:AddMessage("|cffff0000SpellReplay: missing LibSharedMedia-3.0.|r")
+	end
+	return
+end
+
 local ReplayFrame = CreateFrame("Frame", "ReplayFrame", UIParent)
 ReplayFrame:SetPoint("CENTER")
 ReplayFrame:SetWidth(40)
@@ -10,16 +44,159 @@ ReplayFrame:SetMovable(true)
 local ReplayBackground = ReplayFrame:CreateTexture(nil, "BACKGROUND")
 ReplayBackground:SetAllPoints()
 ReplayBackground:SetColorTexture(0, 0, 0, 0.15)
+ReplayFrame.ReplayBackground = ReplayBackground
 
-local InterfaceOptionsFrame_OpenToFrame = InterfaceOptionsFrame_OpenToFrame	InterfaceOptionsFrame_OpenToFrame = InterfaceOptionsFrame_OpenToCategory
+local spellReplaySettingsCategory
+
+local function SpellReplay_GetLibrary(name)
+	local libStub = _G.LibStub
+	if type(libStub) == "table" and type(libStub.GetLibrary) == "function" then
+		return libStub:GetLibrary(name, true)
+	end
+	if type(libStub) == "function" then
+		local ok, lib = pcall(libStub, name, true)
+		if ok then
+			return lib
+		end
+	end
+	return nil
+end
+
+local AceConfig = SpellReplay_GetLibrary("AceConfig-3.0")
+local AceConfigDialog = SpellReplay_GetLibrary("AceConfigDialog-3.0")
+
+local spellReplayUseAceConfig = (AceConfig ~= nil and AceConfigDialog ~= nil)
+local spellReplayAcePanel
+
+local function SpellReplay_OpenOptions()
+	if spellReplayUseAceConfig and spellReplayAcePanel then
+		if type(_G.InterfaceOptionsFrame_OpenToCategory) == "function" then
+			pcall(_G.InterfaceOptionsFrame_OpenToCategory, spellReplayAcePanel)
+			pcall(_G.InterfaceOptionsFrame_OpenToCategory, spellReplayAcePanel)
+			return
+		end
+		if AceConfigDialog and type(AceConfigDialog.Open) == "function" then
+			pcall(AceConfigDialog.Open, AceConfigDialog, "SpellReplay")
+			return
+		end
+	end
+
+	if _G.Settings and type(_G.Settings.OpenToCategory) == "function" and spellReplaySettingsCategory then
+		local id = (spellReplaySettingsCategory.GetID and spellReplaySettingsCategory:GetID())
+			or spellReplaySettingsCategory.ID
+			or "SpellReplay"
+		pcall(_G.Settings.OpenToCategory, id)
+		return
+	end
+
+	if type(_G.InterfaceOptionsFrame_OpenToCategory) == "function" then
+		pcall(_G.InterfaceOptionsFrame_OpenToCategory, _G.ReplaySettingsGeneralPanel or _G.ReplaySettingsPanel)
+		pcall(_G.InterfaceOptionsFrame_OpenToCategory, _G.ReplaySettingsGeneralPanel or _G.ReplaySettingsPanel)
+		return
+	end
+
+	if type(_G.InterfaceOptionsFrame_OpenToFrame) == "function" then
+		pcall(_G.InterfaceOptionsFrame_OpenToFrame, _G.ReplaySettingsGeneralPanel or _G.ReplaySettingsPanel)
+	end
+end
+
+local function SpellReplay_EnsureDefaults()
+	if replaySavedSettings == nil or replaySavedSettings[1] ~= nil then
+		replaySavedSettings = {}
+	end
+	local s = replaySavedSettings
+	s[25] = s[25] or "Arial Narrow"
+	s[11] = s[11] or 1
+	s[12] = s[12] or 0
+	s[13] = s[13] or 1
+	s[14] = s[14] or 1
+	s[15] = s[15] or 1
+	s[16] = s[16] or 1
+	s[17] = s[17] or 100
+	s[18] = s[18] or 30
+	s[19] = s[19] or 30
+	s[20] = s[20] or 4
+	s[21] = s[21] or 1
+	s[22] = s[22] or 1
+	s[23] = s[23] or 1
+	s[24] = s[24] or 1
+	s[31] = s[31] or 2
+	s[32] = s[32] or 2
+	s[33] = s[33] or 1
+	s[34] = s[34] or 1
+	s[35] = s[35] or 1
+	s[36] = s[36] or 1
+	if displayToPartyTable == nil then
+		displayToPartyTable = {}
+	end
+	return s
+end
+
+local function SpellReplay_ApplyCoreSettings()
+	local s = SpellReplay_EnsureDefaults()
+	systemFont = s[25]
+	ReplayFrame:SetScale(s[14])
+	if s[11] == 1 then
+		ReplayFrame:Show()
+	else
+		ReplayFrame:Hide()
+	end
+	if ReplayFrame.ReplayBackground then
+		if s[13] == 1 then
+			ReplayFrame.ReplayBackground:Show()
+		else
+			ReplayFrame.ReplayBackground:Hide()
+		end
+	end
+end
+
+local function SpellReplay_ClearActiveIcons()
+	for i=table.maxn(spellTable)-1,0,-1 do
+		if replayTexture[i] == nil then
+			break
+		end
+		replayTexture[i]:Hide()
+		replayTexture[i] = nil
+		if replayRank[i] ~= nil then
+			replayRank[i]:Hide()
+			replayRank[i] = nil
+		end
+		if replayDamage[i] ~= nil then
+			replayDamage[i]:Hide()
+			replayDamage[i] = nil
+		end
+		if replayFont[i] ~= nil then
+			replayFont[i]:Hide()
+			replayFont[i] = nil
+		end
+		if replayFailTexture[i] ~= nil then
+			replayFailTexture[i]:Hide()
+			replayFailTexture[i] = nil
+		end
+		if replayUpperTexture[i] ~= nil then
+			replayUpperTexture[i]:Hide()
+			replayUpperTexture[i] = nil
+		end
+		if replayUpperFailTexture[i] ~= nil then
+			replayUpperFailTexture[i]:Hide()
+			replayUpperFailTexture[i] = nil
+		end
+	end
+	spellTableMax = 0
+	for k in pairs(spellTable) do spellTable[k] = nil end
+	for k in pairs(timestampTable) do timestampTable[k] = nil end
+end
+
 local ReplayButton = CreateFrame("Button", "ReplayButton", ReplayFrame)
 ReplayButton:SetAllPoints()
 ReplayButton:SetScript("OnMouseDown", function(self, button)
 	if replaySavedSettings[12] == 0 then
-		if not InterfaceOptionsFrame:IsShown() and not GameMenuFrame:IsShown() and button == "RightButton" then
-			InterfaceOptionsFrame_OpenToFrame("SpellReplay")
-		elseif InterfaceOptionsFrame:IsShown() and button == "RightButton" then
-			InterfaceOptionsFrame:Hide()
+		if button == "RightButton" and (not _G.GameMenuFrame or not _G.GameMenuFrame:IsShown()) then
+			if _G.InterfaceOptionsFrame and _G.InterfaceOptionsFrame:IsShown() then
+				_G.InterfaceOptionsFrame:Hide()
+			else
+				SpellReplay_OpenOptions()
+			end
 		else
 			ReplayFrame:StartMoving()
 		end
@@ -42,66 +219,271 @@ local replayUpperTexture = {}
 local replayUpperFailTexture = {}
 local spellTable = {}
 local timestampTable = {}
+local spellTableMax = 0
+
+if type(table.maxn) ~= "function" then
+	function table.maxn(t)
+		if t == spellTable or t == timestampTable then
+			return spellTableMax
+		end
+		local max = 0
+		for k in pairs(t) do
+			if type(k) == "number" and k > max then
+				max = k
+			end
+		end
+		return max
+	end
+end
+
+local function SpellReplay_GetSpellSubtext(spellID)
+	if type(_G.GetSpellSubtext) == "function" then
+		return _G.GetSpellSubtext(spellID)
+	end
+	if type(_G.GetSpellInfo) == "function" then
+		local _, subtext = _G.GetSpellInfo(spellID)
+		return subtext
+	end
+	return nil
+end
+
+local function SpellReplay_TooltipHide()
+	if _G.GameTooltip_Hide then
+		_G.GameTooltip_Hide()
+	elseif _G.GameTooltip and _G.GameTooltip.Hide then
+		_G.GameTooltip:Hide()
+	end
+end
+
+if spellReplayUseAceConfig then
+	local function getFontValues()
+		local values = {}
+		local fonts = LibSharedMedia and LibSharedMedia.List and LibSharedMedia:List("font")
+		if fonts then
+			for _, fontName in ipairs(fonts) do
+				values[fontName] = fontName
+			end
+		end
+		if next(values) == nil then
+			values["Arial Narrow"] = "Arial Narrow"
+		end
+		return values
+	end
+
+	local function getOption(info)
+		local s = SpellReplay_EnsureDefaults()
+		local key = info[#info]
+		if key == "enabled" then return s[11] == 1 end
+		if key == "lock" then return s[12] == 1 end
+		if key == "background" then return s[13] == 1 end
+		if key == "scale" then return s[14] end
+		if key == "direction" then return (s[15] == 2) and "left" or "right" end
+		if key == "crop" then return s[16] == 1 end
+		if key == "push" then return s[17] end
+		if key == "base" then return s[18] end
+		if key == "cast" then return s[19] end
+		if key == "num" then return s[20] end
+		if key == "resists" then return s[21] == 1 end
+		if key == "resistsFrame" then return s[22] == 1 end
+		if key == "resistsChat" then return s[23] == 1 end
+		if key == "resistsParty" then return s[24] == 1 end
+		if key == "pet" then return s[36] == 1 end
+		if key == "font" then return s[25] end
+		return nil
+	end
+
+	local function setOption(info, value)
+		local s = SpellReplay_EnsureDefaults()
+		local key = info[#info]
+		if key == "enabled" then s[11] = value and 1 or 0; SpellReplay_ApplyCoreSettings(); return end
+		if key == "lock" then s[12] = value and 1 or 0; return end
+		if key == "background" then s[13] = value and 1 or 0; SpellReplay_ApplyCoreSettings(); return end
+		if key == "scale" then s[14] = value; SpellReplay_ApplyCoreSettings(); return end
+		if key == "direction" then
+			s[15] = (value == "left") and 2 or 1
+			SpellReplay_ClearActiveIcons()
+			return
+		end
+		if key == "crop" then s[16] = value and 1 or 0; return end
+		if key == "push" then s[17] = value; return end
+		if key == "base" then s[18] = value; return end
+		if key == "cast" then s[19] = value; return end
+		if key == "num" then s[20] = value; return end
+		if key == "resists" then s[21] = value and 1 or 0; return end
+		if key == "resistsFrame" then s[22] = value and 1 or 0; return end
+		if key == "resistsChat" then s[23] = value and 1 or 0; return end
+		if key == "resistsParty" then s[24] = value and 1 or 0; return end
+		if key == "pet" then s[36] = value and 1 or 0; return end
+		if key == "font" then s[25] = value; SpellReplay_ApplyCoreSettings(); return end
+	end
+
+	local options = {
+		type = "group",
+		name = "SpellReplay",
+		get = getOption,
+		set = setOption,
+		args = {
+			general = {
+				type = "group",
+				name = "General",
+				order = 1,
+				args = {
+					enabled = { type = "toggle", name = "Enable", order = 1 },
+					lock = { type = "toggle", name = "Lock position", order = 2 },
+					background = { type = "toggle", name = "Show background", order = 3 },
+					scale = { type = "range", name = "Frame scaling", order = 4, min = 0.8, max = 1.5, step = 0.05, bigStep = 0.05 },
+					direction = { type = "select", name = "Scrolling direction", order = 5, values = { right = "Right", left = "Left" } },
+					crop = { type = "toggle", name = "Crop spell borders", order = 6 },
+					font = { type = "select", name = "Font", order = 7, values = getFontValues },
+				},
+			},
+			speed = {
+				type = "group",
+				name = "Speed",
+				order = 2,
+				args = {
+					push = { type = "range", name = "Push speed", order = 1, min = 30, max = 150, step = 5, bigStep = 5 },
+					base = { type = "range", name = "Base speed", order = 2, min = 0, max = 100, step = 5, bigStep = 5 },
+					cast = { type = "range", name = "Casting speed", order = 3, min = 0, max = 100, step = 5, bigStep = 5 },
+					num = { type = "range", name = "Displayed spells", order = 4, min = 2, max = 6, step = 1, bigStep = 1 },
+				},
+			},
+			optional = {
+				type = "group",
+				name = "Optional",
+				order = 3,
+				args = {
+					pet = { type = "toggle", name = "Display pet spells", order = 1 },
+					resists = { type = "toggle", name = "Display resists", order = 2 },
+					resistsFrame = { type = "toggle", name = "Resists on frame", order = 3, disabled = function() return replaySavedSettings == nil or replaySavedSettings[21] ~= 1 end },
+					resistsChat = { type = "toggle", name = "Resists in chat", order = 4, disabled = function() return replaySavedSettings == nil or replaySavedSettings[21] ~= 1 end },
+					resistsParty = { type = "toggle", name = "Resists in party", order = 5, disabled = function() return replaySavedSettings == nil or replaySavedSettings[21] ~= 1 end },
+				},
+			},
+		},
+	}
+
+	AceConfig:RegisterOptionsTable("SpellReplay", options)
+	spellReplayAcePanel = AceConfigDialog:AddToBlizOptions("SpellReplay", "SpellReplay")
+	AceConfigDialog:AddToBlizOptions("SpellReplay", "General", "SpellReplay", "general")
+	AceConfigDialog:AddToBlizOptions("SpellReplay", "Speed", "SpellReplay", "speed")
+	AceConfigDialog:AddToBlizOptions("SpellReplay", "Optional", "SpellReplay", "optional")
+
+	SLASH_SPELLREPLAY1 = "/spellreplay"
+	SLASH_SPELLREPLAY2 = "/sr"
+	SlashCmdList["SPELLREPLAY"] = function()
+		SpellReplay_OpenOptions()
+	end
+end
+
+local function SpellReplay_AddOptionsCategory(panel, parentCategory)
+	if _G.Settings and type(_G.Settings.RegisterCanvasLayoutCategory) == "function" and type(_G.Settings.RegisterAddOnCategory) == "function" then
+		if parentCategory then
+			if type(_G.Settings.RegisterCanvasLayoutSubcategory) == "function" then
+				return _G.Settings.RegisterCanvasLayoutSubcategory(parentCategory, panel, panel.name or "")
+			end
+			return nil
+		end
+		local category = _G.Settings.RegisterCanvasLayoutCategory(panel, panel.name or "SpellReplay")
+		_G.Settings.RegisterAddOnCategory(category)
+		spellReplaySettingsCategory = category
+		return category
+	end
+
+	if type(_G.InterfaceOptions_AddCategory) == "function" then
+		_G.InterfaceOptions_AddCategory(panel)
+	end
+	return nil
+end
+
 local movSpeed = 0
 local endPos = 0
+
+if not spellReplayUseAceConfig then
 local replaySettings = {}
 replaySettings.panel = CreateFrame("Frame", "ReplaySettingsPanel", UIParent)
 replaySettings.panel.name = "SpellReplay"
-InterfaceOptions_AddCategory(replaySettings.panel)
+local spellReplayMainCategory = SpellReplay_AddOptionsCategory(replaySettings.panel)
 replaySettings.childpanel = CreateFrame( "Frame", "ReplaySettingsGeneralPanel", replaySettings.panel)
 replaySettings.childpanel.name = "General settings"
 replaySettings.childpanel.parent = replaySettings.panel.name
-InterfaceOptions_AddCategory(replaySettings.childpanel)
+SpellReplay_AddOptionsCategory(replaySettings.childpanel, spellReplayMainCategory)
 replaySettings.childpanel = CreateFrame( "Frame", "ReplaySettingsResistsPanel", replaySettings.panel)
 replaySettings.childpanel.name = "Resists settings"
 replaySettings.childpanel.parent = replaySettings.panel.name
-InterfaceOptions_AddCategory(replaySettings.childpanel)
+SpellReplay_AddOptionsCategory(replaySettings.childpanel, spellReplayMainCategory)
 replaySettings.childpanel = CreateFrame( "Frame", "ReplaySettingsOptionalPanel", replaySettings.panel)
 replaySettings.childpanel.name = "Optional settings"
 replaySettings.childpanel.parent = replaySettings.panel.name
-InterfaceOptions_AddCategory(replaySettings.childpanel)
+SpellReplay_AddOptionsCategory(replaySettings.childpanel, spellReplayMainCategory)
 replaySettings = nil
 
 ReplaySettingsPanel:SetScript("OnShow", function() -- fixing ugly panel/childpanels behaviour
 	for i=1,50 do
-		if _G["InterfaceOptionsFrameAddOnsButton"..i]:GetText() == "SpellReplay" then
-			if _G["InterfaceOptionsFrameAddOnsButton"..(i+1)]:GetText() == "General settings" then
-				if ReplaySettingsPanel:IsShown() then
-					_G["InterfaceOptionsFrameAddOnsButton"..(i+1)]:Click()
+		local button = _G["InterfaceOptionsFrameAddOnsButton"..i]
+		if not button or type(button.GetText) ~= "function" then
+			break
+		end
+		if button:GetText() == "SpellReplay" then
+			local nextButton = _G["InterfaceOptionsFrameAddOnsButton"..(i+1)]
+			if nextButton and type(nextButton.GetText) == "function" and nextButton:GetText() == "General settings" then
+				if ReplaySettingsPanel:IsShown() and type(nextButton.Click) == "function" then
+					nextButton:Click()
 				end
 			else
-				_G["InterfaceOptionsFrameAddOnsButton"..i.."Toggle"]:Click()
-				_G["InterfaceOptionsFrameAddOnsButton"..(i+1)]:Click()
+				local toggle = _G["InterfaceOptionsFrameAddOnsButton"..i.."Toggle"]
+				if toggle and type(toggle.Click) == "function" then
+					toggle:Click()
+				end
+				if nextButton and type(nextButton.Click) == "function" then
+					nextButton:Click()
+				end
 			end
 			break
 		end
 	end
-	ReplayResetButton:Show()
+	if ReplayResetButton and type(ReplayResetButton.Show) == "function" then
+		ReplayResetButton:Show()
+	end
 end)
 ReplaySettingsPanel:SetScript("OnHide", function()
-	if InterfaceOptionsFrame:IsShown() then
+	if _G.InterfaceOptionsFrame and _G.InterfaceOptionsFrame:IsShown() then
 		ReplaySettingsPanel:Hide()
 	end
-	ReplayResetButton:Hide()
+	if ReplayResetButton and type(ReplayResetButton.Hide) == "function" then
+		ReplayResetButton:Hide()
+	end
 end)
 ReplaySettingsGeneralPanel:SetScript("OnShow", function()
 	for i=1,50 do
-		if _G["InterfaceOptionsFrameAddOnsButton"..i]:GetText() == "SpellReplay" then
-			if _G["InterfaceOptionsFrameAddOnsButton"..(i+1)]:GetText() == "General settings" and _G["InterfaceOptionsFrameAddOnsButton"..(i+1)]:IsShown() then
-				_G["InterfaceOptionsFrameAddOnsButton"..(i+1)]:Click()
+		local button = _G["InterfaceOptionsFrameAddOnsButton"..i]
+		if not button or type(button.GetText) ~= "function" then
+			break
+		end
+		if button:GetText() == "SpellReplay" then
+			local nextButton = _G["InterfaceOptionsFrameAddOnsButton"..(i+1)]
+			if nextButton and type(nextButton.GetText) == "function" and nextButton:GetText() == "General settings" and type(nextButton.IsShown) == "function" and nextButton:IsShown() and type(nextButton.Click) == "function" then
+				nextButton:Click()
 			else
-				_G["InterfaceOptionsFrameAddOnsButton"..i.."Toggle"]:Click()
+				local toggle = _G["InterfaceOptionsFrameAddOnsButton"..i.."Toggle"]
+				if toggle and type(toggle.Click) == "function" then
+					toggle:Click()
+				end
 			end
 			break
 		end
 	end
-	ReplayResetButton:Show()
+	if ReplayResetButton and type(ReplayResetButton.Show) == "function" then
+		ReplayResetButton:Show()
+	end
 end)
 ReplaySettingsGeneralPanel:SetScript("OnHide", function()
-	if InterfaceOptionsFrame:IsShown() then
+	if _G.InterfaceOptionsFrame and _G.InterfaceOptionsFrame:IsShown() then
 		ReplaySettingsGeneralPanel:Hide()
 	end
-	ReplayResetButton:Hide()
+	if ReplayResetButton and type(ReplayResetButton.Hide) == "function" then
+		ReplayResetButton:Hide()
+	end
 end)
 ReplaySettingsResistsPanel:SetScript("OnShow", function() ReplayResetButton:Show() end)
 ReplaySettingsResistsPanel:SetScript("OnHide", function() ReplayResetButton:Hide() end)
@@ -219,7 +601,7 @@ SettingsScalingSlider:SetScript("OnValueChanged", function()
 	GameTooltip:SetOwner(SettingsScalingSlider, "ANCHOR_TOP", 120, 20)
 	GameTooltip:SetText("Scaling: x"..replaySavedSettings[14])
 	GameTooltip:Show()
-	GameTooltip:FadeOut()
+	SpellReplay_TooltipHide()
 end)
 SettingsScalingSlider:SetScript("OnEnter", function()
 	if SettingsScalingSlider:GetValue() > 0 then
@@ -231,7 +613,7 @@ SettingsScalingSlider:SetScript("OnEnter", function()
 	GameTooltip:SetOwner(SettingsScalingSlider, "ANCHOR_TOP", 120, 20)
 	GameTooltip:SetText("Scaling: x"..replaySavedSettings[14])
 	GameTooltip:Show()
-	GameTooltip:FadeOut()
+	SpellReplay_TooltipHide()
 end)
 
 local SettingsDirectionFont = ReplaySettingsGeneralPanel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
@@ -260,7 +642,7 @@ local function createDropdown(opts)
     local change_func = opts['changeFunc'] or function (dropdown_val) end
 
     local dropdown = CreateFrame("Frame", dropdown_name, opts['parent'], 'UIDropDownMenuTemplate')
-    local dd_title = dropdown:CreateFontString(nil, 'OVERLAY', 'GameFontNormal')
+    local dd_title = dropdown:CreateFontString(dropdown, 'OVERLAY', 'GameFontNormal')
     dd_title:SetPoint("TOPLEFT", 20, 10)
 
     for _, item in pairs(menu_items) do -- Sets the dropdown width to the largest item string width.
@@ -477,14 +859,14 @@ SettingsPushSpeedSlider:SetScript("OnValueChanged", function()
 	GameTooltip:SetOwner(SettingsPushSpeedSlider, "ANCHOR_TOP", 120, 20)
 	GameTooltip:SetText("Push speed: "..replaySavedSettings[17])
 	GameTooltip:Show()
-	GameTooltip:FadeOut()
+	SpellReplay_TooltipHide()
 end)
 SettingsPushSpeedSlider:SetScript("OnEnter", function()
 	replaySavedSettings[17] = 30 + SettingsPushSpeedSlider:GetValue() * 5
 	GameTooltip:SetOwner(SettingsPushSpeedSlider, "ANCHOR_TOP", 120, 20)
 	GameTooltip:SetText("Push speed: "..replaySavedSettings[17])
 	GameTooltip:Show()
-	GameTooltip:FadeOut()
+	SpellReplay_TooltipHide()
 end)
 
 local SettingsBaseSpeedFont = ReplaySettingsGeneralPanel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
@@ -510,14 +892,14 @@ SettingsBaseSpeedSlider:SetScript("OnValueChanged", function()
 	GameTooltip:SetOwner(SettingsBaseSpeedSlider, "ANCHOR_TOP", 120, 20)
 	GameTooltip:SetText("Base speed "..replaySavedSettings[18])
 	GameTooltip:Show()
-	GameTooltip:FadeOut()
+	SpellReplay_TooltipHide()
 end)
 SettingsBaseSpeedSlider:SetScript("OnEnter", function()
 	replaySavedSettings[18] = SettingsBaseSpeedSlider:GetValue() * 5
 	GameTooltip:SetOwner(SettingsBaseSpeedSlider, "ANCHOR_TOP", 120, 20)
 	GameTooltip:SetText("Base speed: "..replaySavedSettings[18])
 	GameTooltip:Show()
-	GameTooltip:FadeOut()
+	SpellReplay_TooltipHide()
 end)
 
 local SettingsCastingSpeedFont = ReplaySettingsGeneralPanel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
@@ -543,14 +925,14 @@ SettingsCastingSpeedSlider:SetScript("OnValueChanged", function()
 	GameTooltip:SetOwner(SettingsCastingSpeedSlider, "ANCHOR_TOP", 120, 20)
 	GameTooltip:SetText("Casting speed: "..replaySavedSettings[19])
 	GameTooltip:Show()
-	GameTooltip:FadeOut()
+	SpellReplay_TooltipHide()
 end)
 SettingsCastingSpeedSlider:SetScript("OnEnter", function()
 	replaySavedSettings[19] = SettingsCastingSpeedSlider:GetValue() * 5
 	GameTooltip:SetOwner(SettingsCastingSpeedSlider, "ANCHOR_TOP", 120, 20)
 	GameTooltip:SetText("Casting speed: "..replaySavedSettings[19])
 	GameTooltip:Show()
-	GameTooltip:FadeOut()
+	SpellReplay_TooltipHide()
 end)
 
 local SettingsSpellNbFont = ReplaySettingsGeneralPanel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
@@ -576,14 +958,14 @@ SettingsSpellNbSlider:SetScript("OnValueChanged", function()
 	GameTooltip:SetOwner(SettingsSpellNbSlider, "ANCHOR_TOP", 120, 20)
 	GameTooltip:SetText("Displayed: "..replaySavedSettings[20].." spells")
 	GameTooltip:Show()
-	GameTooltip:FadeOut()
+	SpellReplay_TooltipHide()
 end)
 SettingsSpellNbSlider:SetScript("OnEnter", function()
 	replaySavedSettings[20] = SettingsSpellNbSlider:GetValue() + 2
 	GameTooltip:SetOwner(SettingsSpellNbSlider, "ANCHOR_TOP", 120, 20)
 	GameTooltip:SetText("Displayed: "..replaySavedSettings[20].." spells")
 	GameTooltip:Show()
-	GameTooltip:FadeOut()
+	SpellReplay_TooltipHide()
 end)
 
 --
@@ -1452,7 +1834,8 @@ StaticPopupDialogs["REPLAYRESET_POPUP"] = {
 	timeout = 0,
 	whileDead = 1,
 }
-local ReplayResetButton = CreateFrame("Button", "ReplayResetButton", InterfaceOptionsFrame, "UIPanelButtonGrayTemplate")
+local SpellReplayResetParent = _G.ReplaySettingsPanel or _G.InterfaceOptionsFrame or _G.SettingsPanel or UIParent
+local ReplayResetButton = CreateFrame("Button", "ReplayResetButton", SpellReplayResetParent, "UIPanelButtonGrayTemplate")
 ReplayResetButton:SetPoint("TOPRIGHT", -32, -413)
 ReplayResetButton:SetText("Reset to default")
 ReplayResetButton:SetWidth(120)
@@ -1461,6 +1844,8 @@ ReplayResetButton:Hide()
 ReplayResetButton:SetScript("OnClick", function()
 	StaticPopup_Show ("REPLAYRESET_POPUP")
 end)
+
+end
 
 --
 
@@ -1498,215 +1883,48 @@ ReplayFrame:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
 ReplayFrame:RegisterEvent("PLAYER_LOGIN")
 ReplayFrame:SetScript("OnEvent", function(self, event, ...)
 	if event == "PLAYER_LOGIN" then
-		if replaySavedSettings == nil or replaySavedSettings[1] ~= nil then
+		local isNewSettings = (replaySavedSettings == nil) or (replaySavedSettings[1] ~= nil)
+		if isNewSettings then
 			replaySavedSettings = {}
-			replaySavedSettings[25] = "Arial Narrow"
-			replaySavedSettings[11] = 1
-			SettingsEnableButton:SetChecked(true)
-			replaySavedSettings[12] = 0
-			replaySavedSettings[13] = 1
-			SettingsBackgroundButton:SetChecked(true)
-			replaySavedSettings[14] = 1
-			SettingsScalingSlider:SetValue(2)
-			replaySavedSettings[15] = 1
-			UIDropDownMenu_SetText(SettingsDirectionMenu, "Right")
-			replaySavedSettings[16] = 1
-			SettingsCropTexButton:SetChecked(true)
-			replaySavedSettings[17] = 100
-			SettingsPushSpeedSlider:SetValue(14)
-			replaySavedSettings[18] = 30
-			SettingsBaseSpeedSlider:SetValue(6)
-			replaySavedSettings[19] = 30
-			SettingsCastingSpeedSlider:SetValue(6)
-			replaySavedSettings[20] = 4
-			SettingsSpellNbSlider:SetValue(2)
-			replaySavedSettings[21] = 1
-			SettingsDisplayResistsButton:SetChecked(true)
-			replaySavedSettings[22] = 1
-			SettingsResistsOnFrameButton:SetChecked(true)
-			replaySavedSettings[23] = 1
-			SettingsResistsOnChatFrameButton:SetChecked(true)
-			replaySavedSettings[24] = 1
-			SettingsResistsOnPartyButton:SetChecked(true)
-			replaySavedSettings[31] = 2
-			SettingsRanksButton:SetChecked(true)
-			SettingsRankOneButton:SetChecked(true)
-			replaySavedSettings[32] = 2
-			SettingsWhiteHitsButton:SetChecked(true)
-			SettingsRangedWhiteHitsButton:SetChecked(true)
-			replaySavedSettings[33] = 1
-			SettingsDamagesButton:SetChecked(true)
-			SettingsAllDamagesButton:SetChecked(true)
-			replaySavedSettings[34] = 1
-			SettingsHealsButton:SetChecked(true)
-			SettingsAllHealsButton:SetChecked(true)
-			replaySavedSettings[35] = 1
-			SettingsManaButton:SetChecked(true)
-			replaySavedSettings[36] = 1
-			SettingsPetSpellsButton:SetChecked(true)
-			displayToPartyTable = {}
-		else
-			if replaySavedSettings[11] == 1 then -- Enable (on/off)
-				SettingsEnableButton:SetChecked(true)
-			else
-				ReplayFrame:Hide()
-			end
-			if replaySavedSettings[12] == 1 then -- Lock position (on/off)
-				SettingsLockButton:SetChecked(true)
-			end
-			if replaySavedSettings[13] == 1 then -- Show background (on/off)
-				SettingsBackgroundButton:SetChecked(true)
-			else
-				ReplayBackground:Hide()
-			end
-			ReplayFrame:SetScale(replaySavedSettings[14]) -- Frame scaling (0.8 - 1.5)
-			SettingsScalingSlider:SetValue((replaySavedSettings[14] - 0.8) * 10)
-			if replaySavedSettings[15] == 1 or replaySavedSettings[15] == nil then -- Scrolling direction (Right/Left)
-				UIDropDownMenu_SetText(SettingsDirectionMenu, "Right")
-			else
-				UIDropDownMenu_SetText(SettingsDirectionMenu, "Left")
-			end
-			if replaySavedSettings[16] == 1 then -- Crop spell borders (on/off)
-				SettingsCropTexButton:SetChecked(true)
-			end
-			if replaySavedSettings[17] == nil then -- Scrolling speed (30 - 150 / 0 - 100)
-				replaySavedSettings[17] = 100
-				SettingsPushSpeedSlider:SetValue(14)
-				replaySavedSettings[18] = 30
-				SettingsBaseSpeedSlider:SetValue(6)
-				replaySavedSettings[19] = 30
-				SettingsCastingSpeedSlider:SetValue(6)
-			else
-				SettingsPushSpeedSlider:SetValue((replaySavedSettings[17] - 30) / 5)
-				SettingsBaseSpeedSlider:SetValue(replaySavedSettings[18] / 5)
-				SettingsCastingSpeedSlider:SetValue(replaySavedSettings[19] / 5)
-			end
-			if replaySavedSettings[20] == nil then -- Number of spells to display (2 - 6)
-				replaySavedSettings[20] = 4
-				SettingsSpellNbSlider:SetValue(2)
-			else
-				SettingsSpellNbSlider:SetValue(replaySavedSettings[20] - 2)
-			end
-			if replaySavedSettings[21] == 1 then -- Display resists (on/off)
-				SettingsDisplayResistsButton:SetChecked(true)
-			else
-				SettingsResistsOnFrameButton:Disable()
-				SettingsResistsOnFrameFont:SetTextColor(0.5, 0.5, 0.5)
-				SettingsResistsOnChatFrameButton:Disable()
-				SettingsResistsOnChatFrameFont:SetTextColor(0.5, 0.5, 0.5)
-				SettingsResistsOnPartyButton:Disable()
-				SettingsResistsOnPartyFont:SetTextColor(0.5, 0.5, 0.5)
-				DisplayToPartyAddButton:Disable()
-				DisplayToPartyDelButton:Disable()
-				for i,value in pairs(displayToPartyTable) do
-					if _G["SettingsListContentButton"..i] ~= nil then
-						_G["SettingsListContentFont"..i]:SetTextColor(0.5, 0.5, 0.5)
-						_G["SettingsListContentButton"..i]:Disable()
-					end
-				end
-			end
-			if replaySavedSettings[22] == 1 then -- Display resists on the frame (on/off)
-				SettingsResistsOnFrameButton:SetChecked(true)
-			end
-			if replaySavedSettings[23] == 1 then -- Display resists on the chat (on/off)
-				SettingsResistsOnChatFrameButton:SetChecked(true)
-			end
-			if replaySavedSettings[24] == 1 then -- Display resists on /party (on/off)
-				SettingsResistsOnPartyButton:SetChecked(true)
-			else
-				DisplayToPartyAddButton:Disable()
-				DisplayToPartyDelButton:Disable()
-				for i,value in pairs(displayToPartyTable) do
-					if _G["SettingsListContentButton"..i] ~= nil then
-						_G["SettingsListContentFont"..i]:SetTextColor(0.5, 0.5, 0.5)
-						_G["SettingsListContentButton"..i]:Disable()
-					end
-				end
-			end
-			if replaySavedSettings[31] == 0 then -- Display spell ranks (none/all/rank one)
-				SettingsAllRanksButton:SetChecked(true)
-				SettingsAllRanksButton:Disable()
-				SettingsAllRanksFont:SetTextColor(0.5, 0.5, 0.5)
-				SettingsRankOneButton:Disable()
-				SettingsRankOneFont:SetTextColor(0.5, 0.5, 0.5)
-			elseif replaySavedSettings[31] == 1 then
-				SettingsRanksButton:SetChecked(true)
-				SettingsAllRanksButton:SetChecked(true)
-			else
-				SettingsRanksButton:SetChecked(true)
-				SettingsRankOneButton:SetChecked(true)
-			end
-			if replaySavedSettings[32] == 0 then -- Display white hits (none/melee+-ranged)
-				SettingsMeleeWhiteHitsButton:Disable()
-				SettingsMeleeWhiteHitsFont:SetTextColor(0.5, 0.5, 0.5)
-				SettingsRangedWhiteHitsButton:Disable()
-				SettingsRangedWhiteHitsFont:SetTextColor(0.5, 0.5, 0.5)
-			elseif replaySavedSettings[32] == 1 then
-				SettingsWhiteHitsButton:SetChecked(true)
-				SettingsMeleeWhiteHitsButton:SetChecked(true)
-			elseif replaySavedSettings[32] == 2 then
-				SettingsWhiteHitsButton:SetChecked(true)
-				SettingsRangedWhiteHitsButton:SetChecked(true)
-			else
-				SettingsWhiteHitsButton:SetChecked(true)
-				SettingsMeleeWhiteHitsButton:SetChecked(true)
-				SettingsRangedWhiteHitsButton:SetChecked(true)
-			end
-			if replaySavedSettings[33] == 0 then -- Display damages (none/all/crits)
-				SettingsAllDamagesButton:SetChecked(true)
-				SettingsAllDamagesButton:Disable()
-				SettingsAllDamagesFont:SetTextColor(0.5, 0.5, 0.5)
-				SettingsCritDamagesButton:Disable()
-				SettingsCritDamagesFont:SetTextColor(0.5, 0.5, 0.5)
-			elseif replaySavedSettings[33] == 1 then
-				SettingsDamagesButton:SetChecked(true)
-				SettingsAllDamagesButton:SetChecked(true)
-			else
-				SettingsDamagesButton:SetChecked(true)
-				SettingsCritDamagesButton:SetChecked(true)
-			end
-			if replaySavedSettings[34] == 0 then -- Display heals (none/all/crits)
-				SettingsAllHealsButton:SetChecked(true)
-				SettingsAllHealsButton:Disable()
-				SettingsAllHealsFont:SetTextColor(0.5, 0.5, 0.5)
-				SettingsCritHealsButton:Disable()
-				SettingsCritHealsFont:SetTextColor(0.5, 0.5, 0.5)
-			elseif replaySavedSettings[34] == 1 then
-				SettingsHealsButton:SetChecked(true)
-				SettingsAllHealsButton:SetChecked(true)
-			else
-				SettingsHealsButton:SetChecked(true)
-				SettingsCritHealsButton:SetChecked(true)
-			end
-			if replaySavedSettings[35] == 1 then -- Display mana gains (on/off)
-				SettingsManaButton:SetChecked(true)
-			end
-			if replaySavedSettings[36] == nil or replaySavedSettings[36] == 1 then -- Display pet spells (on/off)
-				SettingsPetSpellsButton:SetChecked(true)
-				replaySavedSettings[36] = 1
-			end
 		end
+
+		local s = replaySavedSettings
+		s[25] = s[25] or "Arial Narrow"
+		s[11] = s[11] or 1
+		s[12] = s[12] or 0
+		s[13] = s[13] or 1
+		s[14] = s[14] or 1
+		s[15] = s[15] or 1
+		s[16] = s[16] or 1
+		s[17] = s[17] or 100
+		s[18] = s[18] or 30
+		s[19] = s[19] or 30
+		s[20] = s[20] or 4
+		s[21] = s[21] or 1
+		s[22] = s[22] or 1
+		s[23] = s[23] or 1
+		s[24] = s[24] or 1
+		s[31] = s[31] or 2
+		s[32] = s[32] or 2
+		s[33] = s[33] or 1
+		s[34] = s[34] or 1
+		s[35] = s[35] or 1
+		s[36] = s[36] or 1
+
 		if displayToPartyTable == nil then
 			displayToPartyTable = {}
-		else
-			DisplayToPartyListing()
 		end
-		local raid_opts = {
-			['name']='font',
-			['parent']=ReplaySettingsGeneralPanel,
-			['title']='Font Selection',
-			['items']= newFonts,
-			['defaultVal']=replaySavedSettings[25], 
-			['changeFunc']=function(dropdown_frame, dropdown_val)
-				replaySavedSettings[25] = dropdown_val -- Custom logic goes here, when you change your dropdown option.
-			end
-		}
-		
-		fontDD = createDropdown(raid_opts)
-		-- Don't forget to set your dropdown's points, we don't do this in the creation method for simplicities sake.
-		fontDD:SetPoint("TOPLEFT", ReplaySettingsGeneralPanel, 180, -240);
-		systemFont = replaySavedSettings[25]
-		ReplayFrame:UnregisterEvent("PLAYER_LOGIN")
+
+		systemFont = s[25]
+		self:SetScale(s[14])
+		if s[11] ~= 1 then
+			self:Hide()
+		end
+		if s[13] ~= 1 and self.ReplayBackground then
+			self.ReplayBackground:Hide()
+		end
+		self:UnregisterEvent("PLAYER_LOGIN")
+		return
 	end
 
 
@@ -1714,7 +1932,7 @@ ReplayFrame:SetScript("OnEvent", function(self, event, ...)
 
 	if event == "UNIT_SPELLCAST_SUCCEEDED" and select(1,...) == "player" and GetSpellInfo(select(3,...)) ~= "Attack" and GetSpellInfo(select(3,...)) ~= "Throw" and GetSpellInfo(select(3,...)) ~= "Shoot" and GetSpellInfo(select(3,...)) ~= "Auto Shot" and GetSpellInfo(select(3,...)) ~= "Combat Swap (DND)" then
 		local spellName = GetSpellInfo(select(3,...))
-		local spellRank = GetSpellSubtext(select(3,...))
+		local spellRank = SpellReplay_GetSpellSubtext(select(3,...))
 		if table.maxn(spellTable) == 0 then
 			replayTexture[0] = ReplayFrame:CreateTexture(nil, "ARTWORK")
 			replayTexture[0]:SetPoint("TOPLEFT", 0, 0)
@@ -1726,6 +1944,7 @@ ReplayFrame:SetScript("OnEvent", function(self, event, ...)
 			end
 			spellTable[1] = spellName
 			timestampTable[1] = GetTime()
+			spellTableMax = 1
 		elseif spellName ~= spellTable[table.maxn(spellTable)] or spellName == spellTable[table.maxn(spellTable)] and GetTime() - timestampTable[table.maxn(timestampTable)] > 0.5 then
 			local i = table.maxn(spellTable)
 			replayTexture[i] = ReplayFrame:CreateTexture(nil)
@@ -1750,6 +1969,7 @@ ReplayFrame:SetScript("OnEvent", function(self, event, ...)
 			end
 			spellTable[i+1] = spellName
 			timestampTable[i+1] = GetTime()
+			spellTableMax = i + 1
 		end
 		if table.maxn(spellTable) > 0 and replayTexture[table.maxn(spellTable) - 1]:GetTexture() == nil then
 			local i = table.maxn(spellTable) - 1
@@ -1807,10 +2027,15 @@ ReplayFrame:SetScript("OnEvent", function(self, event, ...)
 	if event == "COMBAT_LOG_EVENT_UNFILTERED" then
 		-- arg12: spellID or misstype
 		-- arg13: spellname
-		local _, eventType, _, sourceGUID, spellCaster, _, _, _, destName, arg10, arg11, arg12, arg13, arg14, arg15, arg16, arg17, arg18, arg19, arg20, arg21, arg22, arg23 = CombatLogGetCurrentEventInfo()
+		local _, eventType, _, sourceGUID, spellCaster, _, _, _, destName, _, _, arg12, arg13, arg14, arg15, arg16, arg17, arg18, arg19, arg20, arg21, arg22, arg23
+		if type(_G.CombatLogGetCurrentEventInfo) == "function" then
+			_, eventType, _, sourceGUID, spellCaster, _, _, _, destName, _, _, arg12, arg13, arg14, arg15, arg16, arg17, arg18, arg19, arg20, arg21, arg22, arg23 = _G.CombatLogGetCurrentEventInfo()
+		else
+			_, eventType, _, sourceGUID, spellCaster, _, _, _, destName, _, _, arg12, arg13, arg14, arg15, arg16, arg17, arg18, arg19, arg20, arg21, arg22, arg23 = ...
+		end
 		spellID = arg12
-		if sourceGUID == UnitGUID("pet") and replaySavedSettings[36] == 1 or eventType == "SPELL_AURA_APPLIED" and arg10 == "Seduction" and UnitChannelInfo("pet") and strfind(select(4, UnitChannelInfo("pet")), "Spell_Shadow_MindSteal") then -- pet spells
-			if (eventType == "SPELL_DAMAGE" or eventType == "SPELL_MISSED") and select(2, UnitClass("player")) == "MAGE" or eventType == "SPELL_CAST_SUCCESS" and select(2, UnitClass("player")) ~= "MAGE" or eventType == "SPELL_AURA_APPLIED" and arg10 == "Seduction" and sourceGUID == "0x0000000000000000" then
+		if sourceGUID == UnitGUID("pet") and replaySavedSettings[36] == 1 or eventType == "SPELL_AURA_APPLIED" and arg13 == "Seduction" and UnitChannelInfo("pet") and strfind(select(4, UnitChannelInfo("pet")), "Spell_Shadow_MindSteal") then -- pet spells
+			if (eventType == "SPELL_DAMAGE" or eventType == "SPELL_MISSED") and select(2, UnitClass("player")) == "MAGE" or eventType == "SPELL_CAST_SUCCESS" and select(2, UnitClass("player")) ~= "MAGE" or eventType == "SPELL_AURA_APPLIED" and arg13 == "Seduction" and sourceGUID == "0x0000000000000000" then
 				spellID = arg12
 				local spellName = GetSpellInfo(spellID)
 				local i = table.maxn(spellTable)
@@ -1834,6 +2059,7 @@ ReplayFrame:SetScript("OnEvent", function(self, event, ...)
 					replayTexture[0]:SetTexture(select(3, GetSpellInfo(spellID)))
 					spellTable[1] = spellName
 					timestampTable[1] = GetTime()
+					spellTableMax = 1
 				elseif spellName ~= spellTable[table.maxn(spellTable)] or spellName == spellTable[table.maxn(spellTable)] and GetTime() - timestampTable[table.maxn(timestampTable)] > 0.5 then
 					replayTexture[i] = ReplayFrame:CreateTexture(nil)
 					if replaySavedSettings[15] == 1 then
@@ -1866,6 +2092,7 @@ ReplayFrame:SetScript("OnEvent", function(self, event, ...)
 					replayTexture[i]:SetTexture(select(3, GetSpellInfo(spellID)))
 					spellTable[i+1] = spellName
 					timestampTable[i+1] = GetTime()
+					spellTableMax = i + 1
 				end
 				local i = table.maxn(spellTable) - 1
 				if eventType == "SPELL_DAMAGE" and replaySavedSettings[33] ~= 0 then
@@ -1946,6 +2173,7 @@ ReplayFrame:SetScript("OnEvent", function(self, event, ...)
 					replayTexture[0]:SetTexture(select(3, GetSpellInfo(spellID)))
 					spellTable[1] = spellName
 					timestampTable[1] = GetTime()
+					spellTableMax = 1
 				else
 					for i=table.maxn(spellTable),0,-1 do
 						if replayTexture[i-1] ~= nil and select(3, GetSpellInfo(spellID)) == replayTexture[i-1]:GetTexture() and (GetTime() - timestampTable[i] < 1 or strfind(arg13, "Effect") and GetTime() - timestampTable[i] < 1.5) then
@@ -1983,6 +2211,7 @@ ReplayFrame:SetScript("OnEvent", function(self, event, ...)
 							replayTexture[i]:SetTexture(select(3, GetSpellInfo(spellID)))
 							spellTable[i+1] = spellName
 							timestampTable[i+1] = GetTime()
+							spellTableMax = i + 1
 							break
 						end
 					end
@@ -2061,6 +2290,7 @@ ReplayFrame:SetScript("OnEvent", function(self, event, ...)
 				end
 				spellTable[1] = spellName
 				timestampTable[1] = GetTime()
+				spellTableMax = 1
 			elseif spellName ~= spellTable[table.maxn(spellTable)] or spellName == spellTable[table.maxn(spellTable)] then
 				replayTexture[i] = ReplayFrame:CreateTexture(nil)
 				if replaySavedSettings[15] == 1 then
@@ -2086,6 +2316,7 @@ ReplayFrame:SetScript("OnEvent", function(self, event, ...)
 				end
 				spellTable[i+1] = spellName
 				timestampTable[i+1] = GetTime()
+				spellTableMax = i + 1
 			end
 			if replayTexture[i] ~= nil then
 				if eventType == "SWING_DAMAGE" or eventType == "SWING_MISSED" then
@@ -2357,24 +2588,24 @@ ReplayUpdateFrame:SetScript("OnUpdate", function(self, elapsed)
 					replayTexture[i]:SetPoint("TOPLEFT", select(4, replayTexture[i]:GetPoint()) + movSpeed * elapsed, 0)
 				elseif replaySavedSettings[15] == 1 and select(4, replayTexture[i]:GetPoint()) < endPos or replaySavedSettings[15] == 2 and select(4, replayTexture[i]:GetPoint()) > endPos then
 					replayTexture[i]:SetPoint("TOPLEFT", select(4, replayTexture[i]:GetPoint()) + movSpeed * elapsed, 0)
-					replayTexture[i]:SetAlpha(math.max(0, abs(endPos - select(4, replayTexture[i]:GetPoint())) / 20))
+					replayTexture[i]:SetAlpha(abs(endPos - select(4, replayTexture[i]:GetPoint())) / 20)
 					if replayRank[i] ~= nil then
-						replayRank[i]:SetAlpha(math.max(0, abs(endPos - select(4, replayTexture[i]:GetPoint())) / 20))
+						replayRank[i]:SetAlpha(abs(endPos - select(4, replayTexture[i]:GetPoint())) / 20)
 					end
 					if replayDamage[i] ~= nil then
-						replayDamage[i]:SetAlpha(math.max(0, abs(endPos - select(4, replayTexture[i]:GetPoint())) / 20))
+						replayDamage[i]:SetAlpha(abs(endPos - select(4, replayTexture[i]:GetPoint())) / 20)
 					end
 					if replayFont[i] ~= nil then
-						replayFont[i]:SetAlpha(math.max(0, abs(endPos - select(4, replayTexture[i]:GetPoint())) / 20))
+						replayFont[i]:SetAlpha(abs(endPos - select(4, replayTexture[i]:GetPoint())) / 20)
 					end
 					if replayFailTexture[i] ~= nil then
-						replayFailTexture[i]:SetAlpha(math.max(0, abs(endPos - select(4, replayTexture[i]:GetPoint())) / 20))
+						replayFailTexture[i]:SetAlpha(abs(endPos - select(4, replayTexture[i]:GetPoint())) / 20)
 					end
 					if replayUpperTexture[i] ~= nil then
-						replayUpperTexture[i]:SetAlpha(math.max(0, abs(endPos - select(4, replayTexture[i]:GetPoint())) / 20))
+						replayUpperTexture[i]:SetAlpha(abs(endPos - select(4, replayTexture[i]:GetPoint())) / 20)
 					end
 					if replayUpperFailTexture[i] ~= nil then
-						replayUpperFailTexture[i]:SetAlpha(math.max(0, abs(endPos - select(4, replayTexture[i]:GetPoint())) / 20))
+						replayUpperFailTexture[i]:SetAlpha(abs(endPos - select(4, replayTexture[i]:GetPoint())) / 20)
 					end
 				elseif replayTexture[i] ~= nil then
 					replayTexture[i]:Hide()
