@@ -1,4 +1,5 @@
 ## Interface: 20504
+## X-Curse-Project-ID: 1464370
 ## Title: SpellReplay
 ## Author: Pytte, Mako (Venoxis) - Original: Oldsalt (Smolderforge)
 ## Notes: Displays the spells you just casted and much more
