@@ -5,7 +5,7 @@ on:
     tags:
       - '*'
     branches:
-      - main   # pushes to main produce alpha builds on CurseForge
+      - master
 
 jobs:
   release:
@@ -15,24 +15,8 @@ jobs:
         with:
           fetch-depth: 0   # full history needed for changelog generation
 
-      # BigWigsMods/packager:
-      #  - Reads SpellReplay.toc        (## Interface: 50500) → MoP Classic
-      #  - Reads SpellReplay-Classic.toc (## Interface: 11503) → Classic Era
-      #  - Reads SpellReplay-BCC.toc    (## Interface: 20504) → TBC/Anniversary
-      #  - Tagged commits → Release/Beta/Alpha (based on tag name)
-      #  - Untagged main push           → Alpha
-      #
-      # Required secrets (set in repo Settings → Secrets and variables → Actions):
-      #   CF_API_KEY     – CurseForge API token (https://www.curseforge.com/account/api-tokens)
-      #                    CF_PROJECT_ID is read from the .pkgmeta x-curse-project-id field
-      #
-      # Optional secrets:
-      #   WOWI_API_TOKEN – WoWInterface upload token
-      #   WOWI_ID        – WoWInterface project ID
-      #   GITHUB_TOKEN   – auto-provided by Actions, used for GitHub Releases
       - name: Package and upload
         uses: BigWigsMods/packager@v2
         env:
           CF_API_KEY: ${{ secrets.CF_API_KEY }}
-          WOWI_API_TOKEN: ${{ secrets.WOWI_API_TOKEN }}
           GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
